@@ -330,3 +330,50 @@ export async function downloadImageAsDataUrl(
     return { success: false, error: String(error) };
   }
 }
+
+/**
+ * 下载图片到本地文件
+ * 返回本地文件路径
+ */
+export async function downloadImageToFile(
+  imageUrl: string,
+  downloadDir?: string
+): Promise<{ success: boolean; filePath?: string; error?: string }> {
+  try {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+
+    // 默认下载目录
+    const dir = downloadDir || path.join(os.homedir(), ".openclaw", "data", "wemp", "images");
+
+    // 确保目录存在
+    await fs.mkdir(dir, { recursive: true });
+
+    // 下载图片
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      return { success: false, error: `下载图片失败: ${response.status}` };
+    }
+
+    const buffer = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+
+    // 确定文件扩展名
+    let ext = "jpg";
+    if (contentType.includes("png")) ext = "png";
+    else if (contentType.includes("gif")) ext = "gif";
+    else if (contentType.includes("webp")) ext = "webp";
+
+    // 生成唯一文件名
+    const filename = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const filePath = path.join(dir, filename);
+
+    // 写入文件
+    await fs.writeFile(filePath, Buffer.from(buffer));
+
+    return { success: true, filePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}

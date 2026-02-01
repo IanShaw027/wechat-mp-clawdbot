@@ -5,13 +5,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ResolvedWechatMpAccount, WechatMpMessage, WechatMpChannelConfig } from "./types.js";
 import { verifySignature, processWechatMessage } from "./crypto.js";
-import { sendTypingStatus, sendCustomMessage, sendImageByUrl, downloadImageAsDataUrl } from "./api.js";
+import { sendTypingStatus, sendCustomMessage, sendImageByUrl, downloadImageToFile } from "./api.js";
 import { getWechatMpRuntime } from "./runtime.js";
 
 // 匹配文本中的图片 URL（支持 markdown 格式和纯 URL）
 const IMAGE_URL_PATTERNS = [
-  /!\[.*?\]\((https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s)]*)?)\)/gi, // ![alt](url)
-  /(?<!\()(https?:\/\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s<>"']*)?)(?!\))/gi, // 纯 URL
+  /!\[.*?\]\((https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s)]*)?)\)/gi, // ![alt](http url)
+  /(?<!\()(https?:\/\/[^\s<>"']+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s<>"']*)?)(?!\))/gi, // 纯 http URL
+];
+
+// 匹配 data URL 格式的图片
+const DATA_URL_PATTERNS = [
+  /!\[.*?\]\((data:image\/[^;]+;base64,[A-Za-z0-9+/=]+)\)/gi, // ![alt](data:image/...;base64,...)
+  /(?<!\()(data:image\/[^;]+;base64,[A-Za-z0-9+/=]+)(?!\))/gi, // 纯 data URL
 ];
 
 // 已知的图片服务域名（这些服务的 URL 可能没有扩展名）
@@ -26,21 +32,31 @@ const KNOWN_IMAGE_HOSTS = [
 ];
 
 /**
- * 从文本中提取图片 URL
+ * 从文本中提取图片 URL（包括 http URL 和 data URL）
  */
-function extractImageUrls(text: string): string[] {
-  const urls = new Set<string>();
+function extractImageUrls(text: string): { httpUrls: string[]; dataUrls: string[] } {
+  const httpUrls = new Set<string>();
+  const dataUrls = new Set<string>();
 
-  // 1. 匹配带扩展名的图片 URL
+  // 1. 匹配 data URL 格式的图片
+  for (const pattern of DATA_URL_PATTERNS) {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      const url = match[1] || match[0];
+      if (url) dataUrls.add(url);
+    }
+  }
+
+  // 2. 匹配带扩展名的 HTTP 图片 URL
   for (const pattern of IMAGE_URL_PATTERNS) {
     const matches = text.matchAll(pattern);
     for (const match of matches) {
       const url = match[1] || match[0];
-      if (url) urls.add(url);
+      if (url) httpUrls.add(url);
     }
   }
 
-  // 2. 匹配已知图片服务的 URL（可能没有扩展名）
+  // 3. 匹配已知图片服务的 URL（可能没有扩展名）
   const urlPattern = /https?:\/\/[^\s<>"')\]]+/gi;
   const allUrls = text.matchAll(urlPattern);
   for (const match of allUrls) {
@@ -48,14 +64,14 @@ function extractImageUrls(text: string): string[] {
     try {
       const hostname = new URL(url).hostname;
       if (KNOWN_IMAGE_HOSTS.some(host => hostname === host || hostname.endsWith(`.${host}`))) {
-        urls.add(url);
+        httpUrls.add(url);
       }
     } catch {
       // 无效 URL，忽略
     }
   }
 
-  return Array.from(urls);
+  return { httpUrls: Array.from(httpUrls), dataUrls: Array.from(dataUrls) };
 }
 
 /**
@@ -67,22 +83,30 @@ function escapeRegExp(str: string): string {
 
 /**
  * 处理文本中的图片，提取并移除图片 URL
+ * 返回处理后的文本和图片 URL 列表（data URL 和 http URL 合并）
  */
 function processImagesInText(text: string): { text: string; imageUrls: string[] } {
   let processedText = text;
-  const imageUrls = extractImageUrls(text);
+  const { httpUrls, dataUrls } = extractImageUrls(text);
+  const allImageUrls = [...dataUrls, ...httpUrls]; // data URL 优先
 
   // 从文本中移除已提取的图片 URL（包括 markdown 格式）
-  for (const url of imageUrls) {
-    processedText = processedText
-      .replace(new RegExp(`!\\[.*?\\]\\(${escapeRegExp(url)}\\)`, "g"), "")
-      .replace(new RegExp(escapeRegExp(url), "g"), "");
+  for (const url of allImageUrls) {
+    // 对于 data URL，需要特殊处理（因为太长，用简化的正则）
+    if (url.startsWith("data:")) {
+      // 移除 markdown 格式的 data URL
+      processedText = processedText.replace(/!\[.*?\]\(data:image\/[^;]+;base64,[A-Za-z0-9+/=]+\)/gi, "");
+    } else {
+      processedText = processedText
+        .replace(new RegExp(`!\\[.*?\\]\\(${escapeRegExp(url)}\\)`, "g"), "")
+        .replace(new RegExp(escapeRegExp(url), "g"), "");
+    }
   }
 
   // 清理多余的空行
   processedText = processedText.replace(/\n{3,}/g, "\n\n").trim();
 
-  return { text: processedText, imageUrls };
+  return { text: processedText, imageUrls: allImageUrls };
 }
 import {
   isPaired,
@@ -134,8 +158,8 @@ const webhookTargets = new Map<string, {
 const processingMessages = new Set<string>();
 
 // 待处理的图片（用户发送图片后等待说明）
-// key: accountId:openId, value: { dataUrl, timestamp }
-const pendingImages = new Map<string, { dataUrl: string; timestamp: number }>();
+// key: accountId:openId, value: { filePath, timestamp }
+const pendingImages = new Map<string, { filePath: string; timestamp: number }>();
 const PENDING_IMAGE_TIMEOUT = 5 * 60 * 1000; // 5 分钟过期
 
 /**
@@ -340,13 +364,13 @@ async function handleMessage(
     // 检查是否有待处理的图片
     const pendingKey = `${account.accountId}:${openId}`;
     const pendingImage = pendingImages.get(pendingKey);
-    let imageDataUrl: string | undefined;
+    let imageFilePath: string | undefined;
 
     if (pendingImage) {
       // 检查图片是否过期
       if (Date.now() - pendingImage.timestamp < PENDING_IMAGE_TIMEOUT) {
-        imageDataUrl = pendingImage.dataUrl;
-        console.log(`[wemp:${account.accountId}] 用户 ${openId} 有待处理图片`);
+        imageFilePath = pendingImage.filePath;
+        console.log(`[wemp:${account.accountId}] 用户 ${openId} 有待处理图片: ${imageFilePath}`);
       }
       // 无论是否过期，都清除待处理图片
       pendingImages.delete(pendingKey);
@@ -362,25 +386,25 @@ async function handleMessage(
       agentId,
       cfg: storedConfig || cfg,
       runtime,
-      imageDataUrl,
+      imageFilePath,
     });
     return;
   }
 
   // 处理图片消息
   if (msg.msgType === "image" && msg.picUrl) {
-    // 下载图片并转换为 data URL
-    const downloadResult = await downloadImageAsDataUrl(msg.picUrl);
-    if (!downloadResult.success || !downloadResult.dataUrl) {
+    // 下载图片到本地文件（避免 base64 数据过大导致上下文溢出）
+    const downloadResult = await downloadImageToFile(msg.picUrl);
+    if (!downloadResult.success || !downloadResult.filePath) {
       console.error(`[wemp:${account.accountId}] 下载图片失败: ${downloadResult.error}`);
       await sendCustomMessage(account, openId, "抱歉，图片下载失败，请重新发送。");
       return;
     }
 
-    // 保存图片 data URL，等待用户发送说明
+    // 保存图片文件路径，等待用户发送说明
     const pendingKey = `${account.accountId}:${openId}`;
     pendingImages.set(pendingKey, {
-      dataUrl: downloadResult.dataUrl,
+      filePath: downloadResult.filePath,
       timestamp: Date.now(),
     });
 
@@ -438,9 +462,9 @@ async function dispatchWempMessage(params: {
   agentId: string;
   cfg: any;
   runtime: any;
-  imageDataUrl?: string;
+  imageFilePath?: string;
 }): Promise<void> {
-  const { account, openId, text, messageId, timestamp, cfg, runtime, imageDataUrl } = params;
+  const { account, openId, text, messageId, timestamp, cfg, runtime, imageFilePath } = params;
 
   // 从 runtime 获取需要的函数
   const dispatchReplyWithBufferedBlockDispatcher = runtime.channel?.reply?.dispatchReplyWithBufferedBlockDispatcher;
@@ -453,10 +477,40 @@ async function dispatchWempMessage(params: {
   const recordSessionMetaFromInbound = runtime.channel?.session?.recordSessionMetaFromInbound;
   const resolveStorePath = runtime.channel?.session?.resolveStorePath;
   const updateLastRoute = runtime.channel?.session?.updateLastRoute;
+  // 命令处理相关
+  const isControlCommandMessage = runtime.channel?.commands?.isControlCommandMessage;
+  const dispatchControlCommand = runtime.channel?.commands?.dispatchControlCommand;
 
   if (!dispatchReplyWithBufferedBlockDispatcher) {
     console.error(`[wemp:${account.accountId}] dispatchReplyWithBufferedBlockDispatcher not available in runtime`);
     return;
+  }
+
+  // 0. 检查是否是内置命令（/help, /clear, /new 等）
+  if (isControlCommandMessage && dispatchControlCommand) {
+    const isControlCmd = isControlCommandMessage(text, cfg);
+    if (isControlCmd) {
+      console.log(`[wemp:${account.accountId}] 检测到内置命令: ${text}`);
+      try {
+        const result = await dispatchControlCommand({
+          command: text,
+          cfg,
+          channel: "wemp",
+          accountId: account.accountId,
+          sessionKey: `wemp:${account.accountId}:${openId}`,
+          senderId: openId,
+          deliver: async (response: string) => {
+            await sendCustomMessage(account, openId, response);
+          },
+        });
+        if (result?.handled) {
+          console.log(`[wemp:${account.accountId}] 内置命令已处理`);
+          return;
+        }
+      } catch (err) {
+        console.warn(`[wemp:${account.accountId}] 内置命令处理失败:`, err);
+      }
+    }
   }
 
   // 1. 记录渠道活动
@@ -505,10 +559,10 @@ async function dispatchWempMessage(params: {
   // 3. 构建消息信封
   const fromAddress = `wemp:${openId}`;
 
-  // 如果有图片，将 data URL 嵌入消息体（参考 WeCom 的做法）
+  // 如果有图片，添加图片路径标记（参考 QQBot 的做法，避免 base64 数据过大）
   let messageText = text;
-  if (imageDataUrl) {
-    messageText = `[用户发送了一张图片]\n${imageDataUrl}\n\n${text}`;
+  if (imageFilePath) {
+    messageText = `[图片: ${imageFilePath}]\n\n${text}`;
   }
 
   let body = messageText;
@@ -552,16 +606,16 @@ async function dispatchWempMessage(params: {
     AgentId: agentId,
   };
 
-  // 添加图片附件
-  if (imageDataUrl) {
+  // 添加图片附件（使用本地文件路径）
+  if (imageFilePath) {
     ctx.Attachments = [
       {
         type: "image",
-        url: imageDataUrl,
+        url: imageFilePath,
         contentType: "image/jpeg",
       },
     ];
-    ctx.MediaUrls = [imageDataUrl];
+    ctx.MediaUrls = [imageFilePath];
     ctx.NumMedia = "1";
   }
 
