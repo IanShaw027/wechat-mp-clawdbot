@@ -240,5 +240,20 @@ MIT
 
 ## 相关链接
 
+### OpenClaw 部署与接入指南
+
+- [腾讯云服务器 OpenClaw 一键秒级部署指南](https://cloud.tencent.com/developer/article/2624003) | [视频教程](https://cloud.tencent.com/developer/video/85003)
+
+**其他渠道快速接入指南：**
+
+- [QQ 快速接入指南](https://cloud.tencent.com/developer/article/2626045)
+- [企业微信快速接入指南](https://cloud.tencent.com/developer/article/2625147)
+- [飞书快速接入指南](https://cloud.tencent.com/developer/article/2626151)
+- [钉钉快速接入指南](https://cloud.tencent.com/developer/article/2625121)
+- [Telegram 快速接入指南](https://cloud.tencent.com/developer/article/2623991)
+- [Discord 快速接入指南](https://cloud.tencent.com/developer/article/2626068)
+
+### 微信公众号相关
+
 - [微信公众平台](https://mp.weixin.qq.com)
 - [微信公众号开发文档](https://developers.weixin.qq.com/doc/offiaccount/Getting_Started/Overview.html)
