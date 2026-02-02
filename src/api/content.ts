@@ -186,11 +186,12 @@ export function markdownToHtml(markdown: string): string {
   });
 
   // 无序列表
-  html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, "<ul>$&</ul>");
+  html = html.replace(/^- (.+)$/gm, "<li class=\"ul-item\">$1</li>");
+  html = html.replace(/(<li class="ul-item">.*<\/li>\n?)+/g, (match) => `<ul>${match.replace(/ class="ul-item"/g, "")}</ul>`);
 
   // 有序列表
-  html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+  html = html.replace(/^\d+\. (.+)$/gm, "<li class=\"ol-item\">$1</li>");
+  html = html.replace(/(<li class="ol-item">.*<\/li>\n?)+/g, (match) => `<ol>${match.replace(/ class="ol-item"/g, "")}</ol>`);
 
   // 引用
   html = html.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
