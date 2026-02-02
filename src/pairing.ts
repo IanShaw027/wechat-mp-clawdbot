@@ -2,17 +2,15 @@
  * 微信公众号配对功能
  * 支持通过其他渠道配对，配对后可使用完整的个人助理功能
  */
-import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { PAIRING_CODE_EXPIRY_MS } from "./constants.js";
+import { getDataDir, readJsonFile, writeJsonFile } from "./storage.js";
 
 // 数据存储路径
-const DATA_DIR = process.env.WEMP_DATA_DIR || path.join(process.env.HOME || "/tmp", ".openclaw", "data", "wemp");
+const DATA_DIR = getDataDir();
 const PAIRING_FILE = path.join(DATA_DIR, "paired-users.json");
 const PENDING_FILE = path.join(DATA_DIR, "pending-codes.json");
-
-// 配对码有效期（5 分钟）
-const CODE_EXPIRY_MS = 5 * 60 * 1000;
 
 // 配对用户信息
 export interface PairedUser {
@@ -30,67 +28,40 @@ interface PendingCode {
 }
 
 /**
- * 确保数据目录存在
- */
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-}
-
-/**
  * 加载配对用户列表
  */
 function loadPairedUsers(): Record<string, PairedUser> {
-  try {
-    ensureDataDir();
-    if (fs.existsSync(PAIRING_FILE)) {
-      return JSON.parse(fs.readFileSync(PAIRING_FILE, "utf-8"));
-    }
-  } catch (e) {
-    console.error("[wemp:pairing] 加载配对用户失败:", e);
-  }
-  return {};
+  return readJsonFile(PAIRING_FILE, {});
 }
 
 /**
  * 保存配对用户列表
  */
 function savePairedUsers(users: Record<string, PairedUser>): void {
-  ensureDataDir();
-  fs.writeFileSync(PAIRING_FILE, JSON.stringify(users, null, 2));
+  writeJsonFile(PAIRING_FILE, users);
 }
 
 /**
  * 加载待验证的配对码
  */
 function loadPendingCodes(): Record<string, PendingCode> {
-  try {
-    ensureDataDir();
-    if (fs.existsSync(PENDING_FILE)) {
-      const data = JSON.parse(fs.readFileSync(PENDING_FILE, "utf-8"));
-      // 清理过期的配对码
-      const now = Date.now();
-      const valid: Record<string, PendingCode> = {};
-      for (const [code, info] of Object.entries(data) as [string, PendingCode][]) {
-        if (now - info.createdAt < CODE_EXPIRY_MS) {
-          valid[code] = info;
-        }
-      }
-      return valid;
+  const data = readJsonFile<Record<string, PendingCode>>(PENDING_FILE, {});
+  // 清理过期的配对码
+  const now = Date.now();
+  const valid: Record<string, PendingCode> = {};
+  for (const [code, info] of Object.entries(data)) {
+    if (now - info.createdAt < PAIRING_CODE_EXPIRY_MS) {
+      valid[code] = info;
     }
-  } catch (e) {
-    console.error("[wemp:pairing] 加载配对码失败:", e);
   }
-  return {};
+  return valid;
 }
 
 /**
  * 保存待验证的配对码
  */
 function savePendingCodes(codes: Record<string, PendingCode>): void {
-  ensureDataDir();
-  fs.writeFileSync(PENDING_FILE, JSON.stringify(codes, null, 2));
+  writeJsonFile(PENDING_FILE, codes);
 }
 
 /**
@@ -160,7 +131,7 @@ export function verifyPairingCode(
   }
 
   // 检查是否过期
-  if (Date.now() - info.createdAt > CODE_EXPIRY_MS) {
+  if (Date.now() - info.createdAt > PAIRING_CODE_EXPIRY_MS) {
     delete codes[code];
     savePendingCodes(codes);
     return null;

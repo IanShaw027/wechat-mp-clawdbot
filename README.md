@@ -68,6 +68,7 @@
 | **事件处理** | 关注/取关事件自动处理 |
 | **双 Agent 模式** | 客服模式 + 个人助理模式灵活切换 |
 | **跨渠道配对** | 通过 Telegram、飞书等渠道配对解锁完整功能 |
+| **AI 助手开关** | 用户可自主开启/关闭 AI 助手，默认关闭 |
 | **交互式配置** | 支持命令行配置向导 |
 
 <p align="right">(<a href="#微信公众号渠道插件-wemp">返回顶部</a>)</p>
@@ -237,9 +238,14 @@ server {
 | `enabled` | boolean | 否 | 是否启用，默认 `true` |
 | `name` | string | 否 | 账户显示名称 |
 | `webhookPath` | string | 否 | Webhook 路径，默认 `/wemp` |
+| `syncMenu` | boolean | 否 | 是否启动时同步菜单，默认 `false` |
 | `articlesUrl` | string | 否 | 历史文章链接（菜单点击时发送） |
 | `websiteUrl` | string | 否 | 官网链接（菜单点击时发送） |
 | `contactInfo` | string | 否 | 联系信息（菜单点击时发送） |
+| `welcomeMessage` | string | 否 | 用户关注后的欢迎消息 |
+| `aiEnabledMessage` | string | 否 | AI 助手开启时的提示消息 |
+| `aiDisabledMessage` | string | 否 | AI 助手关闭时的提示消息 |
+| `aiDisabledHint` | string | 否 | AI 助手关闭状态下收到消息时的提示（设为空字符串可禁用） |
 
 ## 使用
 
@@ -672,6 +678,7 @@ cat ~/.openclaw/data/wemp/paired-users.json
 - [x] 图片消息接收
 - [x] 图片消息回复
 - [x] 自定义菜单管理
+- [x] AI 助手开关功能
 - [ ] 模板消息支持
 - [ ] 多账号支持
 
@@ -694,15 +701,56 @@ wemp 插件支持微信公众号自定义菜单功能，可以在公众号底部
 │  ├─ 历史文章 (发送文章链接)
 │  └─ 访问官网 (发送官网链接)
 ├─ AI助手
+│  ├─ 开启AI助手 (开启 AI 功能)
+│  ├─ 关闭AI助手 (关闭 AI 功能)
 │  ├─ 新对话 (/new)
 │  ├─ 清除上下文 (/clear)
-│  ├─ 帮助 (/help)
-│  ├─ 配对账号
-│  └─ 查看状态
+│  └─ 使用统计 (/usage)
 └─ 更多
    ├─ 撤销上条 (/undo)
    ├─ 模型信息 (/model)
    └─ 使用统计 (/usage)
+```
+
+### AI 助手开关功能
+
+用户可以通过菜单自主控制 AI 助手的开启/关闭状态：
+
+- **默认状态**：关闭（新用户需要手动开启）
+- **开启方式**：点击菜单「AI助手」->「开启AI助手」
+- **关闭方式**：点击菜单「AI助手」->「关闭AI助手」
+
+当 AI 助手关闭时：
+- 用户发送的消息不会被 AI 处理
+- 系统会发送提示消息引导用户开启
+
+**配置自定义提示消息：**
+
+```json
+{
+  "channels": {
+    "wemp": {
+      "welcomeMessage": "欢迎关注！点击菜单「AI助手」->「开启AI助手」开始使用。",
+      "aiEnabledMessage": "✅ AI 助手已开启！现在可以和我对话了。",
+      "aiDisabledMessage": "🔒 AI 助手已关闭。",
+      "aiDisabledHint": "AI 助手当前已关闭，请点击菜单开启。"
+    }
+  }
+}
+```
+
+**禁用关闭状态提示：**
+
+如果不想在 AI 关闭时发送提示消息，可以将 `aiDisabledHint` 设为空字符串：
+
+```json
+{
+  "channels": {
+    "wemp": {
+      "aiDisabledHint": ""
+    }
+  }
+}
 ```
 
 ### 菜单管理命令
@@ -761,6 +809,28 @@ wemp 插件支持微信公众号自定义菜单功能，可以在公众号底部
 
 因此，本插件使用 `click` 类型菜单，点击后通过消息发送链接给用户。
 
+### 菜单同步限制
+
+使用 `syncMenuWithAiAssistant` 同步后台菜单时，以下菜单类型**暂不支持自动还原**：
+
+| 菜单类型 | 原因 | 处理方式 |
+| -------- | ---- | -------- |
+| **跳转账号主页** | `get_current_selfmenu_info` 接口不返回此类型 | 无法获取，自动忽略 |
+| **跳转橱窗** | `get_current_selfmenu_info` 接口不返回此类型 | 无法获取，自动忽略 |
+| **视频号动态 (video_snap/finder)** | API 不支持通过客服消息发送 | 降级为 click，提示不支持 |
+
+**支持自动还原的菜单类型：**
+
+| 菜单类型 | 转换方式 |
+| -------- | -------- |
+| **图文消息 (news)** | 转换为 view 类型，直接跳转文章链接 |
+| **图片 (img)** | 下载后上传为永久素材，使用 media_id 类型 |
+| **视频 (video)** | 如果是 URL 则降级为 click 发送链接；如果是 media_id 则尝试转换 |
+| **语音 (voice)** | 转换为 click 类型，点击时尝试发送语音（可能因素材过期而失败） |
+| **文字 (text)** | 转换为 click 类型，点击时通过客服消息发送 |
+| **跳转网页 (view)** | 保持 view 类型 |
+| **小程序 (miniprogram)** | 保持 miniprogram 类型 |
+
 ### 完全自定义菜单
 
 如果需要完全自定义菜单结构，可以在配置中指定完整的菜单定义：
@@ -781,8 +851,11 @@ wemp 插件支持微信公众号自定义菜单功能，可以在公众号底部
           {
             "name": "AI助手",
             "sub_button": [
+              { "type": "click", "name": "开启AI助手", "key": "CMD_AI_ENABLE" },
+              { "type": "click", "name": "关闭AI助手", "key": "CMD_AI_DISABLE" },
               { "type": "click", "name": "新对话", "key": "CMD_NEW" },
-              { "type": "click", "name": "帮助", "key": "CMD_HELP" }
+              { "type": "click", "name": "清除上下文", "key": "CMD_CLEAR" },
+              { "type": "click", "name": "使用统计", "key": "CMD_USAGE" }
             ]
           }
         ]
@@ -804,6 +877,8 @@ wemp 插件支持微信公众号自定义菜单功能，可以在公众号底部
 | `CMD_PAIR` | `配对` | 配对账号 |
 | `CMD_MODEL` | `/model` | 模型信息 |
 | `CMD_USAGE` | `/usage` | 使用统计 |
+| `CMD_AI_ENABLE` | - | 开启 AI 助手 |
+| `CMD_AI_DISABLE` | - | 关闭 AI 助手 |
 | `CMD_ARTICLES` | - | 发送历史文章链接 |
 | `CMD_WEBSITE` | - | 发送官网链接 |
 | `CMD_CONTACT` | - | 发送联系信息 |
@@ -845,6 +920,7 @@ npm run dev
 wemp/
 ├── index.ts              # 入口文件，注册插件和 /pair 命令
 ├── src/
+│   ├── ai-assistant-state.ts # AI 助手开关状态管理
 │   ├── api.ts            # 微信 API 封装（access_token、客服消息等）
 │   ├── channel.ts        # Channel Plugin 定义
 │   ├── config.ts         # 配置解析

@@ -3,6 +3,7 @@
  */
 import * as crypto from "crypto";
 import type { ResolvedWechatMpAccount, WechatMpMessage } from "./types.js";
+import { type Result, ok, err } from "./result.js";
 
 /**
  * 验证普通签名
@@ -119,7 +120,7 @@ export function processWechatMessage(
     encrypt_type?: string;
     msg_signature?: string;
   }
-): { success: boolean; message?: WechatMpMessage; error?: string } {
+): Result<WechatMpMessage> {
   const { signature, timestamp, nonce, encrypt_type, msg_signature } = query;
   const isEncrypted = encrypt_type === "aes";
 
@@ -129,25 +130,25 @@ export function processWechatMessage(
     // 安全模式
     const encrypt = extractEncrypt(rawBody);
     if (!encrypt) {
-      return { success: false, error: "无法提取加密内容" };
+      return err("无法提取加密内容");
     }
 
     if (!verifyEncryptSignature(account.token, msg_signature ?? "", timestamp ?? "", nonce ?? "", encrypt)) {
-      return { success: false, error: "加密消息签名验证失败" };
+      return err("加密消息签名验证失败");
     }
 
     try {
       xmlContent = decryptMessage(account.encodingAESKey, account.appId, encrypt);
-    } catch (err) {
-      return { success: false, error: `消息解密失败: ${err}` };
+    } catch (error) {
+      return err(`消息解密失败: ${error}`);
     }
   } else {
     // 明文模式
     if (!verifySignature(account.token, signature ?? "", timestamp ?? "", nonce ?? "")) {
-      return { success: false, error: "消息签名验证失败" };
+      return err("消息签名验证失败");
     }
   }
 
   const message = parseXmlMessage(xmlContent);
-  return { success: true, message };
+  return ok(message);
 }
