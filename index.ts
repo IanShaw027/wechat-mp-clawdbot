@@ -3,7 +3,7 @@ import { wechatMpPlugin } from "./src/channel.js";
 import { setWechatMpRuntime } from "./src/runtime.js";
 import { handleWechatMpWebhookRequest } from "./src/webhook-handler.js";
 import { verifyPairingCode } from "./src/pairing.js";
-import { sendCustomMessage, createMenu, deleteMenu, getMenu, createOpenClawDefaultMenu, createMenuFromConfig } from "./src/api.js";
+import { sendCustomMessage, createMenu, deleteMenu, getMenu, createMenuFromConfig, syncMenuWithAiAssistant } from "./src/api.js";
 import { resolveWechatMpAccount } from "./src/config.js";
 
 // 扩展 API 类型以包含 registerCommand
@@ -34,6 +34,26 @@ const plugin = {
     setWechatMpRuntime(api.runtime);
     api.registerChannel({ plugin: wechatMpPlugin });
     api.registerHttpHandler(handleWechatMpWebhookRequest);
+
+    // 启动时同步菜单（异步执行，不阻塞启动）
+    // 只有显式开启 syncMenu: true 才会同步
+    const cfg = extApi.config;
+    const wempCfg = cfg?.channels?.wemp;
+    if (wempCfg?.enabled && wempCfg?.syncMenu === true) {
+      setImmediate(async () => {
+        try {
+          const account = resolveWechatMpAccount(cfg, "default");
+          if (account) {
+            const result = await syncMenuWithAiAssistant(account, cfg);
+            if (result.action !== "unchanged") {
+              console.log(`[wemp] 菜单同步: ${result.message}`);
+            }
+          }
+        } catch (err) {
+          console.error("[wemp] 菜单同步失败:", err);
+        }
+      });
+    }
 
     // 注册 /pair 命令，用于跨渠道配对
     extApi.registerCommand({
@@ -241,3 +261,4 @@ export * from "./src/config.js";
 export * from "./src/outbound.js";
 export * from "./src/crypto.js";
 export { handleWechatMpWebhookRequest, registerWechatMpWebhookTarget } from "./src/webhook-handler.js";
+export * from "./src/ai-assistant-state.js";
