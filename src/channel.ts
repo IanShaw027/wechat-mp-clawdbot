@@ -9,6 +9,7 @@ import { registerWechatMpWebhookTarget, initPairingConfig, setStoredConfig } fro
 import { wechatMpOnboardingAdapter } from "./onboarding.js";
 import { getAccessToken, sendCustomMessage } from "./api.js";
 import { verifyPairingCode } from "./pairing.js";
+import { WECHAT_MESSAGE_TEXT_LIMIT } from "./constants.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -102,7 +103,7 @@ export const wechatMpPlugin: ChannelPlugin<ResolvedWechatMpAccount> & { pairing?
   },
   outbound: {
     deliveryMode: "direct",
-    textChunkLimit: 600,
+    textChunkLimit: WECHAT_MESSAGE_TEXT_LIMIT,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveWechatMpAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
       const result = await sendText({ to, text, accountId: accountId ?? DEFAULT_ACCOUNT_ID, replyToId, account });

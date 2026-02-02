@@ -3,6 +3,12 @@
  */
 import type { ResolvedWechatMpAccount } from "./types.js";
 import { sendCustomMessage } from "./api.js";
+import { isOk } from "./result.js";
+import {
+  WECHAT_MESSAGE_TEXT_LIMIT,
+  MESSAGE_CHUNK_DELAY_MS,
+  PUNCTUATION_SEARCH_RANGE,
+} from "./constants.js";
 
 /**
  * 发送文本消息
@@ -16,18 +22,17 @@ export async function sendText(opts: {
 }): Promise<{ messageId?: string; error?: string }> {
   const { to, text, account } = opts;
 
-  // 微信客服消息单条建议不超过 600 字，超过则分段发送
-  const maxLength = 600;
-  const parts = splitMessage(text, maxLength);
+  // 微信客服消息单条建议不超过限制，超过则分段发送
+  const parts = splitMessage(text, WECHAT_MESSAGE_TEXT_LIMIT);
 
   for (let i = 0; i < parts.length; i++) {
     const result = await sendCustomMessage(account, to, parts[i]);
-    if (!result.success) {
+    if (!isOk(result)) {
       return { error: result.error };
     }
     // 分段发送时稍微延迟
     if (i < parts.length - 1) {
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, MESSAGE_CHUNK_DELAY_MS));
     }
   }
 
@@ -51,7 +56,7 @@ function splitMessage(text: string, maxLength: number): string[] {
     let splitIndex = maxLength;
     const punctuation = ["。", "！", "？", "\n", "；", "，"];
 
-    for (let i = maxLength; i > maxLength - 100 && i > 0; i--) {
+    for (let i = maxLength; i > maxLength - PUNCTUATION_SEARCH_RANGE && i > 0; i--) {
       if (punctuation.includes(remaining[i])) {
         splitIndex = i + 1;
         break;

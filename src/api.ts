@@ -3,21 +3,30 @@
  */
 import type { ResolvedWechatMpAccount } from "./types.js";
 import { makeMenuPayloadId, upsertMenuPayload, type MenuPayload } from "./menu-payload.js";
+import { type Result, ok, err } from "./result.js";
 import * as crypto from "node:crypto";
 import * as dns from "node:dns/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  MAX_IMAGE_BYTES,
+  MAX_DATA_URL_BYTES,
+  ACCESS_TOKEN_REFRESH_ADVANCE_MS,
+  DEFAULT_ACCESS_TOKEN_EXPIRY_SECONDS,
+  MEDIA_CACHE_EXPIRY_MS,
+  MEDIA_CACHE_ADVANCE_EXPIRY_MS,
+  MEDIA_DOWNLOAD_TIMEOUT_MS,
+  PERMANENT_MEDIA_UPLOAD_TIMEOUT_MS,
+  MAX_MEDIA_DOWNLOAD_BYTES,
+} from "./constants.js";
 
 // Access Token 缓存
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 // Media ID 缓存 (临时素材有效期 3 天)
 const mediaCache = new Map<string, { mediaId: string; expiresAt: number }>();
-
-const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB hard limit (防止内存/带宽滥用)
-const MAX_DATA_URL_BYTES = 3 * 1024 * 1024; // data URL 解码后最大 3MB
 
 type SafeFetchOptions = {
   timeoutMs?: number;
@@ -196,8 +205,8 @@ export async function getAccessToken(account: ResolvedWechatMpAccount): Promise<
   const cacheKey = account.accountId;
   const cached = tokenCache.get(cacheKey);
 
-  // 提前 5 分钟刷新
-  if (cached && Date.now() < cached.expiresAt - 300000) {
+  // 提前刷新（使用常量）
+  if (cached && Date.now() < cached.expiresAt - ACCESS_TOKEN_REFRESH_ADVANCE_MS) {
     return cached.token;
   }
 
@@ -211,7 +220,7 @@ export async function getAccessToken(account: ResolvedWechatMpAccount): Promise<
   }
 
   const token = data.access_token!;
-  const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
+  const expiresAt = Date.now() + (data.expires_in ?? DEFAULT_ACCESS_TOKEN_EXPIRY_SECONDS) * 1000;
 
   tokenCache.set(cacheKey, { token, expiresAt });
   console.log(`[wemp:${account.accountId}] Access Token 已刷新`);
@@ -226,7 +235,7 @@ export async function sendCustomMessage(
   account: ResolvedWechatMpAccount,
   openId: string,
   content: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<Result<void>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=${accessToken}`;
@@ -248,12 +257,12 @@ export async function sendCustomMessage(
     const data = await response.json() as { errcode?: number; errmsg?: string };
 
     if (data.errcode && data.errcode !== 0) {
-      return { success: false, error: `${data.errcode} - ${data.errmsg}` };
+      return err(`${data.errcode} - ${data.errmsg}`);
     }
 
-    return { success: true };
+    return ok(undefined);
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -266,13 +275,13 @@ export async function uploadTempMedia(
   account: ResolvedWechatMpAccount,
   imageSource: string,
   type: "image" | "voice" | "video" | "thumb" = "image"
-): Promise<{ success: boolean; mediaId?: string; error?: string }> {
+): Promise<Result<string>> {
   try {
     // 检查缓存（对于 data URL 使用前 100 字符作为 key）
     const cacheKey = `${account.accountId}:${type}:${imageSource.slice(0, 100)}`;
     const cached = mediaCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
-      return { success: true, mediaId: cached.mediaId };
+      return ok(cached.mediaId);
     }
 
     let imageBytes: Uint8Array;
@@ -283,13 +292,13 @@ export async function uploadTempMedia(
       // data URL 格式: data:image/png;base64,xxxxx
       const matches = imageSource.match(/^data:([^;]+);base64,(.+)$/);
       if (!matches) {
-        return { success: false, error: "无效的 data URL 格式" };
+        return err("无效的 data URL 格式");
       }
       contentType = matches[1];
       const base64Data = matches[2];
       const buf = Buffer.from(base64Data, "base64");
       if (buf.byteLength > MAX_DATA_URL_BYTES) {
-        return { success: false, error: `data URL 图片过大 (limit=${MAX_DATA_URL_BYTES} bytes)` };
+        return err(`data URL 图片过大 (limit=${MAX_DATA_URL_BYTES} bytes)`);
       }
       imageBytes = new Uint8Array(buf);
     } else if (isProbablyFilePath(imageSource)) {
@@ -299,7 +308,7 @@ export async function uploadTempMedia(
         const safePath = await resolveSafeLocalImagePath(imageSource);
         const fileBuffer = await fs.readFile(safePath);
         if (fileBuffer.byteLength > MAX_IMAGE_BYTES) {
-          return { success: false, error: `本地图片过大 (limit=${MAX_IMAGE_BYTES} bytes)` };
+          return err(`本地图片过大 (limit=${MAX_IMAGE_BYTES} bytes)`);
         }
         imageBytes = new Uint8Array(fileBuffer);
         // 根据扩展名推断 content type
@@ -308,8 +317,8 @@ export async function uploadTempMedia(
         else if (ext === ".gif") contentType = "image/gif";
         else if (ext === ".webp") contentType = "image/webp";
         else contentType = "image/jpeg";
-      } catch (err) {
-        return { success: false, error: `读取本地文件失败: ${err}` };
+      } catch (error) {
+        return err(`读取本地文件失败: ${error}`);
       }
     } else {
       // HTTP/HTTPS URL
@@ -317,7 +326,7 @@ export async function uploadTempMedia(
       try {
         url = await validateExternalUrl(imageSource);
       } catch (e) {
-        return { success: false, error: `禁止的图片 URL: ${String(e)}` };
+        return err(`禁止的图片 URL: ${String(e)}`);
       }
 
       const imageResponse = await safeFetch(url.toString(), undefined, {
@@ -325,7 +334,7 @@ export async function uploadTempMedia(
         maxBytes: MAX_IMAGE_BYTES,
         redirect: "follow",
       });
-      if (!imageResponse.ok) return { success: false, error: `下载图片失败: ${imageResponse.status}` };
+      if (!imageResponse.ok) return err(`下载图片失败: ${imageResponse.status}`);
 
       contentType = imageResponse.headers.get("content-type") || "image/jpeg";
       imageBytes = await readResponseBytesWithLimit(imageResponse, MAX_IMAGE_BYTES);
@@ -374,7 +383,7 @@ export async function uploadTempMedia(
     const data = await response.json() as { media_id?: string; errcode?: number; errmsg?: string };
 
     if (data.errcode && data.errcode !== 0) {
-      return { success: false, error: `上传失败: ${data.errcode} - ${data.errmsg}` };
+      return err(`上传失败: ${data.errcode} - ${data.errmsg}`);
     }
 
     const mediaId = data.media_id!;
@@ -382,12 +391,12 @@ export async function uploadTempMedia(
     // 缓存 media_id (有效期 3 天，提前 1 小时过期)
     mediaCache.set(cacheKey, {
       mediaId,
-      expiresAt: Date.now() + (3 * 24 * 60 * 60 * 1000) - (60 * 60 * 1000),
+      expiresAt: Date.now() + MEDIA_CACHE_EXPIRY_MS - MEDIA_CACHE_ADVANCE_EXPIRY_MS,
     });
 
-    return { success: true, mediaId };
+    return ok(mediaId);
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -398,7 +407,7 @@ export async function sendImageMessage(
   account: ResolvedWechatMpAccount,
   openId: string,
   mediaId: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<Result<void>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=${accessToken}`;
@@ -420,12 +429,12 @@ export async function sendImageMessage(
     const data = await response.json() as { errcode?: number; errmsg?: string };
 
     if (data.errcode && data.errcode !== 0) {
-      return { success: false, error: `${data.errcode} - ${data.errmsg}` };
+      return err(`${data.errcode} - ${data.errmsg}`);
     }
 
-    return { success: true };
+    return ok(undefined);
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -437,7 +446,7 @@ export async function sendVoiceMessage(
   account: ResolvedWechatMpAccount,
   openId: string,
   mediaId: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<Result<void>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=${accessToken}`;
@@ -459,12 +468,12 @@ export async function sendVoiceMessage(
     const data = await response.json() as { errcode?: number; errmsg?: string };
 
     if (data.errcode && data.errcode !== 0) {
-      return { success: false, error: `${data.errcode} - ${data.errmsg}` };
+      return err(`${data.errcode} - ${data.errmsg}`);
     }
 
-    return { success: true };
+    return ok(undefined);
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -481,11 +490,11 @@ export async function sendVideoMessage(
     title?: string;
     description?: string;
   }
-): Promise<{ success: boolean; error?: string }> {
+): Promise<Result<void>> {
   try {
     // 微信客服消息的视频通常需要 thumb_media_id，否则会报参数错误
     if (!options?.thumbMediaId) {
-      return { success: false, error: "缺少 thumbMediaId（微信视频客服消息通常需要缩略图）" };
+      return err("缺少 thumbMediaId（微信视频客服消息通常需要缩略图）");
     }
 
     const accessToken = await getAccessToken(account);
@@ -513,12 +522,12 @@ export async function sendVideoMessage(
     const data = await response.json() as { errcode?: number; errmsg?: string };
 
     if (data.errcode && data.errcode !== 0) {
-      return { success: false, error: `${data.errcode} - ${data.errmsg}` };
+      return err(`${data.errcode} - ${data.errmsg}`);
     }
 
-    return { success: true };
+    return ok(undefined);
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -530,15 +539,15 @@ export async function sendImageByUrl(
   account: ResolvedWechatMpAccount,
   openId: string,
   imageUrl: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<Result<void>> {
   // 先上传获取 media_id
   const uploadResult = await uploadTempMedia(account, imageUrl, "image");
-  if (!uploadResult.success || !uploadResult.mediaId) {
-    return { success: false, error: uploadResult.error || "上传图片失败" };
+  if (!uploadResult.success) {
+    return err(uploadResult.error);
   }
 
   // 发送图片消息
-  return sendImageMessage(account, openId, uploadResult.mediaId);
+  return sendImageMessage(account, openId, uploadResult.data);
 }
 
 /**
@@ -554,7 +563,7 @@ export async function sendNewsMessage(
     url: string;
     picurl?: string;
   }>
-): Promise<{ success: boolean; error?: string }> {
+): Promise<Result<void>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=${accessToken}`;
@@ -576,12 +585,12 @@ export async function sendNewsMessage(
     const data = await response.json() as { errcode?: number; errmsg?: string };
 
     if (data.errcode && data.errcode !== 0) {
-      return { success: false, error: `${data.errcode} - ${data.errmsg}` };
+      return err(`${data.errcode} - ${data.errmsg}`);
     }
 
-    return { success: true };
+    return ok(undefined);
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -591,7 +600,7 @@ export async function sendNewsMessage(
 export async function sendTypingStatus(
   account: ResolvedWechatMpAccount,
   openId: string
-): Promise<boolean> {
+): Promise<Result<void>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/message/custom/typing?access_token=${accessToken}`;
@@ -609,10 +618,13 @@ export async function sendTypingStatus(
       { timeoutMs: DEFAULT_FETCH_TIMEOUT_MS }
     );
 
-    const data = await response.json() as { errcode?: number };
-    return data.errcode === 0;
-  } catch {
-    return false;
+    const data = await response.json() as { errcode?: number; errmsg?: string };
+    if (data.errcode === 0) {
+      return ok(undefined);
+    }
+    return err(`${data.errcode} - ${data.errmsg || "Unknown error"}`);
+  } catch (error) {
+    return err(String(error));
   }
 }
 
@@ -625,12 +637,12 @@ export async function sendTypingStatus(
 export async function getTempMedia(
   account: ResolvedWechatMpAccount,
   mediaId: string
-): Promise<{ success: boolean; data?: Buffer; contentType?: string; error?: string }> {
+): Promise<Result<{ data: Buffer; contentType: string }>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/media/get?access_token=${accessToken}&media_id=${mediaId}`;
 
-    const response = await safeFetch(url, undefined, { timeoutMs: 30000 });
+    const response = await safeFetch(url, undefined, { timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS });
 
     const contentType = response.headers.get("content-type") || "";
     const normalizedType = contentType.split(";")[0].trim() || "application/octet-stream";
@@ -641,18 +653,18 @@ export async function getTempMedia(
       const text = await response.text();
       try {
         const data = JSON.parse(text) as { errcode?: number; errmsg?: string };
-        if (data.errcode) return { success: false, error: `${data.errcode} - ${data.errmsg}` };
+        if (data.errcode) return err(`${data.errcode} - ${data.errmsg}`);
       } catch {
         // ignore
       }
       const snippet = text.length > 200 ? `${text.slice(0, 200)}…` : text;
-      return { success: false, error: `获取素材失败：意外返回文本响应 (${normalizedType}): ${snippet}` };
+      return err(`获取素材失败：意外返回文本响应 (${normalizedType}): ${snippet}`);
     }
 
-    const bytes = await readResponseBytesWithLimit(response, 20 * 1024 * 1024); // 20MB limit
-    return { success: true, data: Buffer.from(bytes), contentType: normalizedType };
+    const bytes = await readResponseBytesWithLimit(response, MAX_MEDIA_DOWNLOAD_BYTES);
+    return ok({ data: Buffer.from(bytes), contentType: normalizedType });
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -663,7 +675,7 @@ export async function getTempMedia(
 export async function getPermanentMedia(
   account: ResolvedWechatMpAccount,
   mediaId: string
-): Promise<{ success: boolean; data?: Buffer; contentType?: string; error?: string }> {
+): Promise<Result<{ data: Buffer; contentType: string }>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/material/get_material?access_token=${accessToken}`;
@@ -672,7 +684,7 @@ export async function getPermanentMedia(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ media_id: mediaId }),
-    }, { timeoutMs: 30000 });
+    }, { timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS });
 
     const contentType = response.headers.get("content-type") || "";
     const normalizedType = contentType.split(";")[0].trim() || "application/octet-stream";
@@ -683,18 +695,18 @@ export async function getPermanentMedia(
       const text = await response.text();
       try {
         const data = JSON.parse(text) as { errcode?: number; errmsg?: string };
-        if (data.errcode) return { success: false, error: `${data.errcode} - ${data.errmsg}` };
+        if (data.errcode) return err(`${data.errcode} - ${data.errmsg}`);
       } catch {
         // ignore
       }
       const snippet = text.length > 200 ? `${text.slice(0, 200)}…` : text;
-      return { success: false, error: `获取永久素材失败：该素材可能为图文或接口返回了非二进制响应 (${normalizedType}): ${snippet}` };
+      return err(`获取永久素材失败：该素材可能为图文或接口返回了非二进制响应 (${normalizedType}): ${snippet}`);
     }
 
-    const bytes = await readResponseBytesWithLimit(response, 20 * 1024 * 1024); // 20MB limit
-    return { success: true, data: Buffer.from(bytes), contentType: normalizedType };
+    const bytes = await readResponseBytesWithLimit(response, MAX_MEDIA_DOWNLOAD_BYTES);
+    return ok({ data: Buffer.from(bytes), contentType: normalizedType });
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -704,7 +716,7 @@ export async function getPermanentMedia(
 export async function getMedia(
   account: ResolvedWechatMpAccount,
   mediaId: string
-): Promise<{ success: boolean; data?: Buffer; contentType?: string; error?: string }> {
+): Promise<Result<{ data: Buffer; contentType: string }>> {
   // 先尝试临时素材 API
   const tempResult = await getTempMedia(account, mediaId);
   if (tempResult.success) {
@@ -720,7 +732,7 @@ export async function getMedia(
     return permResult;
   }
 
-  return { success: false, error: `临时素材: ${tempResult.error}; 永久素材: ${permResult.error}` };
+  return err(`临时素材: ${tempResult.error}; 永久素材: ${permResult.error}`);
 }
 
 /**
@@ -737,7 +749,7 @@ export async function uploadPermanentMedia(
     title?: string;       // video 类型必填
     introduction?: string; // video 类型必填
   }
-): Promise<{ success: boolean; mediaId?: string; url?: string; error?: string }> {
+): Promise<Result<{ mediaId: string; url?: string }>> {
   try {
     const accessToken = await getAccessToken(account);
     const url = `https://api.weixin.qq.com/cgi-bin/material/add_material?access_token=${accessToken}&type=${type}`;
@@ -788,7 +800,7 @@ export async function uploadPermanentMedia(
         },
         body,
       },
-      { timeoutMs: 60000 } // 永久素材上传可能较慢
+      { timeoutMs: PERMANENT_MEDIA_UPLOAD_TIMEOUT_MS }
     );
 
     const data = await response.json() as {
@@ -799,16 +811,15 @@ export async function uploadPermanentMedia(
     };
 
     if (data.errcode && data.errcode !== 0) {
-      return { success: false, error: `上传失败: ${data.errcode} - ${data.errmsg}` };
+      return err(`上传失败: ${data.errcode} - ${data.errmsg}`);
     }
 
-    return {
-      success: true,
-      mediaId: data.media_id,
+    return ok({
+      mediaId: data.media_id!,
       url: data.url, // 图片类型会返回 URL
-    };
+    });
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
@@ -824,25 +835,25 @@ export async function convertToPermanentMedia(
     title?: string;
     introduction?: string;
   }
-): Promise<{ success: boolean; mediaId?: string; error?: string }> {
+): Promise<Result<string>> {
   // 1. 智能下载素材（先尝试临时素材，失败后尝试永久素材）
   const downloadResult = await getMedia(account, mediaId);
-  if (!downloadResult.success || !downloadResult.data) {
-    return { success: false, error: `下载素材失败: ${downloadResult.error}` };
+  if (!downloadResult.success) {
+    return err(`下载素材失败: ${downloadResult.error}`);
   }
 
   // 2. 上传为永久素材
-  const uploadResult = await uploadPermanentMedia(account, downloadResult.data, type, {
-    contentType: downloadResult.contentType,
+  const uploadResult = await uploadPermanentMedia(account, downloadResult.data.data, type, {
+    contentType: downloadResult.data.contentType,
     title: options?.title,
     introduction: options?.introduction,
   });
 
-  if (!uploadResult.success || !uploadResult.mediaId) {
-    return { success: false, error: `上传永久素材失败: ${uploadResult.error}` };
+  if (!uploadResult.success) {
+    return err(`上传永久素材失败: ${uploadResult.error}`);
   }
 
-  return { success: true, mediaId: uploadResult.mediaId };
+  return ok(uploadResult.data.mediaId);
 }
 
 /**
@@ -930,7 +941,7 @@ export async function downloadImageAsDataUrl(
 export async function downloadImageToFile(
   imageUrl: string,
   downloadDir?: string
-): Promise<{ success: boolean; filePath?: string; error?: string }> {
+): Promise<Result<string>> {
   try {
     const fs = await import("node:fs/promises");
 
@@ -946,7 +957,7 @@ export async function downloadImageToFile(
       timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
       redirect: "follow",
     });
-    if (!response.ok) return { success: false, error: `下载图片失败: ${response.status}` };
+    if (!response.ok) return err(`下载图片失败: ${response.status}`);
 
     const contentType = response.headers.get("content-type") || "image/jpeg";
     const bytes = await readResponseBytesWithLimit(response, MAX_IMAGE_BYTES);
@@ -961,9 +972,9 @@ export async function downloadImageToFile(
     // 写入文件
     await fs.writeFile(filePath, Buffer.from(bytes));
 
-    return { success: true, filePath };
+    return ok(filePath);
   } catch (error) {
-    return { success: false, error: String(error) };
+    return err(String(error));
   }
 }
 
