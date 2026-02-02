@@ -28,7 +28,7 @@ const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 // Media ID 缓存 (临时素材有效期 3 天)
 const mediaCache = new Map<string, { mediaId: string; expiresAt: number }>();
 
-type SafeFetchOptions = {
+export type SafeFetchOptions = {
   timeoutMs?: number;
   maxBytes?: number;
   redirect?: RequestRedirect;
@@ -106,7 +106,7 @@ async function validateExternalUrl(rawUrl: string): Promise<URL> {
   return url;
 }
 
-async function safeFetch(url: string, init?: RequestInit, opts?: SafeFetchOptions): Promise<Response> {
+export async function safeFetch(url: string, init?: RequestInit, opts?: SafeFetchOptions): Promise<Response> {
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -976,6 +976,138 @@ export async function downloadImageToFile(
   } catch (error) {
     return err(String(error));
   }
+}
+
+/**
+ * 上传图文消息内的图片
+ * 返回微信内部 URL，用于正文中的图片
+ * 注意：此接口返回的 URL 只能用于图文消息正文中的图片
+ */
+export async function uploadArticleImage(
+  account: ResolvedWechatMpAccount,
+  imageSource: string
+): Promise<Result<string>> {
+  try {
+    let imageBytes: Uint8Array;
+    let contentType = "image/jpeg";
+
+    // 处理不同类型的图片来源
+    if (imageSource.startsWith("data:")) {
+      // data URL 格式
+      const matches = imageSource.match(/^data:([^;]+);base64,(.+)$/);
+      if (!matches) {
+        return err("无效的 data URL 格式");
+      }
+      contentType = matches[1];
+      const base64Data = matches[2];
+      const buf = Buffer.from(base64Data, "base64");
+      if (buf.byteLength > MAX_DATA_URL_BYTES) {
+        return err(`data URL 图片过大 (limit=${MAX_DATA_URL_BYTES} bytes)`);
+      }
+      imageBytes = new Uint8Array(buf);
+    } else if (isProbablyFilePath(imageSource)) {
+      // 本地文件路径
+      const fs = await import("node:fs/promises");
+      try {
+        const safePath = await resolveSafeLocalImagePath(imageSource);
+        const fileBuffer = await fs.readFile(safePath);
+        if (fileBuffer.byteLength > MAX_IMAGE_BYTES) {
+          return err(`本地图片过大 (limit=${MAX_IMAGE_BYTES} bytes)`);
+        }
+        imageBytes = new Uint8Array(fileBuffer);
+        const ext = path.extname(safePath).toLowerCase();
+        if (ext === ".png") contentType = "image/png";
+        else if (ext === ".gif") contentType = "image/gif";
+        else if (ext === ".webp") contentType = "image/webp";
+        else contentType = "image/jpeg";
+      } catch (error) {
+        return err(`读取本地文件失败: ${error}`);
+      }
+    } else {
+      // HTTP/HTTPS URL
+      let url: URL;
+      try {
+        url = await validateExternalUrl(imageSource);
+      } catch (e) {
+        return err(`禁止的图片 URL: ${String(e)}`);
+      }
+
+      const imageResponse = await safeFetch(url.toString(), undefined, {
+        timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+        maxBytes: MAX_IMAGE_BYTES,
+        redirect: "follow",
+      });
+      if (!imageResponse.ok) return err(`下载图片失败: ${imageResponse.status}`);
+
+      contentType = imageResponse.headers.get("content-type") || "image/jpeg";
+      imageBytes = await readResponseBytesWithLimit(imageResponse, MAX_IMAGE_BYTES);
+    }
+
+    // 确定文件扩展名
+    const ext = inferImageExtFromContentType(contentType);
+
+    // 上传到微信
+    const accessToken = await getAccessToken(account);
+    const url = `https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=${accessToken}`;
+
+    // 构建 multipart/form-data
+    const boundary = "----WebKitFormBoundary" + Math.random().toString(36).slice(2);
+    const filename = `image.${ext}`;
+
+    const bodyParts: Uint8Array[] = [];
+
+    // 添加文件字段
+    const header = `--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`;
+    bodyParts.push(new TextEncoder().encode(header));
+    bodyParts.push(imageBytes);
+    bodyParts.push(new TextEncoder().encode(`\r\n--${boundary}--\r\n`));
+
+    // 合并所有部分
+    const totalLength = bodyParts.reduce((sum, part) => sum + part.length, 0);
+    const body = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const part of bodyParts) {
+      body.set(part, offset);
+      offset += part.length;
+    }
+
+    const response = await safeFetch(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+        },
+        body,
+      },
+      { timeoutMs: PERMANENT_MEDIA_UPLOAD_TIMEOUT_MS }
+    );
+
+    const data = await response.json() as { url?: string; errcode?: number; errmsg?: string };
+
+    if (data.errcode && data.errcode !== 0) {
+      return err(`上传失败: ${data.errcode} - ${data.errmsg}`);
+    }
+
+    if (!data.url) {
+      return err("上传成功但未返回 URL");
+    }
+
+    return ok(data.url);
+  } catch (error) {
+    return err(String(error));
+  }
+}
+
+/**
+ * 从 URL 上传图片到微信（用于图文消息正文）
+ * 便捷方法，自动处理图片下载和上传
+ */
+export async function uploadArticleImageFromUrl(
+  account: ResolvedWechatMpAccount,
+  imageUrl: string
+): Promise<Result<string>> {
+  return uploadArticleImage(account, imageUrl);
 }
 
 export const __internal = {

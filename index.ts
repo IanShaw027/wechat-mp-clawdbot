@@ -257,6 +257,8 @@ export { setWechatMpRuntime, getWechatMpRuntime } from "./src/runtime.js";
 export { wechatMpOnboardingAdapter } from "./src/onboarding.js";
 export * from "./src/types.js";
 export * from "./src/api.js";
+export * from "./src/api/index.js";
+export * from "./src/api-utils.js";
 export * from "./src/config.js";
 export * from "./src/outbound.js";
 export * from "./src/crypto.js";
