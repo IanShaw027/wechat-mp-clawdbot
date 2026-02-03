@@ -66,40 +66,14 @@ const plugin = {
         const args = ctx.args?.trim() || "";
         const parts = args.split(/\s+/);
 
-        // 检查是否是授权用户（只有授权用户才能批准配对）
-        // 从配置文件读取允许使用 /pair 命令的用户列表
-        const cfg = ctx.config || (api as any).config;
-        const wempCfg = (cfg as any)?.channels?.wemp;
-        const pairAllowFrom: string[] = wempCfg?.pairAllowFrom || [];
-
-        // 如果配置了 pairAllowFrom，则检查发送者是否在列表中
-        if (pairAllowFrom.length > 0) {
-          const senderId = ctx.senderId || "";
-          const senderLower = senderId.trim().toLowerCase();
-          const isAllowed = pairAllowFrom.some(entry => {
-            const normalized = String(entry).trim().toLowerCase();
-            return normalized === "*" ||
-                   (senderLower.length > 0 && normalized === senderLower);
-          });
-
-          if (!isAllowed) {
-            return {
-              text: `⚠️ 你没有权限使用此命令。\n\n` +
-                `你的用户 ID: ${senderId}\n` +
-                `渠道: ${ctx.channel || "unknown"}\n\n` +
-                `请将你的用户 ID 添加到配置文件的 channels.wemp.pairAllowFrom 列表中。`,
-            };
-          }
-        } else {
-          // 如果没有配置 pairAllowFrom，则使用 isAuthorizedSender
-          if (!ctx.isAuthorizedSender) {
-            return {
-              text: `⚠️ 你没有权限使用此命令。\n\n` +
-                `你的用户 ID: ${ctx.senderId || "unknown"}\n` +
-                `渠道: ${ctx.channel || "unknown"}\n\n` +
-                `请在配置文件中设置 channels.wemp.pairAllowFrom 来指定允许的用户。`,
-            };
-          }
+        // 检查是否是授权用户（只有主会话的授权用户才能批准配对）
+        if (!ctx.isAuthorizedSender) {
+          return {
+            text: `⚠️ 你没有权限使用此命令。\n\n` +
+              `你的用户 ID: ${ctx.senderId || "unknown"}\n` +
+              `渠道: ${ctx.channel || "unknown"}\n\n` +
+              `只有主会话的授权用户才能使用此命令。`,
+          };
         }
 
         // 检查参数格式

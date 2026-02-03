@@ -157,8 +157,7 @@ openclaw configure --section channels
     "wemp": {
       "agentPaired": "main",
       "agentUnpaired": "wemp-cs",
-      "pairingApiToken": "your-secure-random-token",
-      "pairAllowFrom": ["telegram:123456789"]
+      "pairingApiToken": "your-secure-random-token"
     }
   }
 }
@@ -169,7 +168,8 @@ openclaw configure --section channels
 | `agentPaired` | 已配对用户使用的 Agent ID |
 | `agentUnpaired` | 未配对用户使用的 Agent ID |
 | `pairingApiToken` | 配对 API Token |
-| `pairAllowFrom` | 允许使用 `/pair wemp <配对码>` 的用户列表（跨渠道管理员） |
+
+> **注意**：只要是主会话的授权用户就可以使用 `/pair wemp <配对码>` 命令进行配对批准。
 
 </details>
 
@@ -314,7 +314,6 @@ AI 助手**默认关闭**，用户需要通过菜单「AI助手」→「开启AI
 | `agentPaired` | string | | 已配对用户使用的 Agent ID |
 | `agentUnpaired` | string | | 未配对用户使用的 Agent ID |
 | `pairingApiToken` | string | | 配对 API Token |
-| `pairAllowFrom` | string[] | | 允许使用 `/pair wemp <配对码>` 的用户列表 |
 
 </details>
 

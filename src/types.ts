@@ -12,11 +12,6 @@ export interface WechatMpChannelConfig {
   name?: string;
   webhookPath?: string;
   accounts?: Record<string, WechatMpAccountConfig>;
-  /**
-   * Allowlist for who can use `/pair wemp <code>` from other channels.
-   * Example: ["telegram:123", "discord:456"].
-   */
-  pairAllowFrom?: string[];
   // 配对功能配置
   agentPaired?: string;      // 已配对用户使用的 Agent ID
   agentUnpaired?: string;    // 未配对用户使用的 Agent ID
