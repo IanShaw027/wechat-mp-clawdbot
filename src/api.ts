@@ -721,15 +721,15 @@ export async function getMedia(
   // 先尝试临时素材 API
   const tempResult = await getTempMedia(account, mediaId);
   if (tempResult.success) {
-    logInfo(`[wemp] 通过临时素材 API 下载成功: ${mediaId.substring(0, 20)}...`);
+    logInfo(`[wemp:${account.accountId}] 通过临时素材 API 下载成功: ${mediaId.substring(0, 20)}...`);
     return tempResult;
   }
 
   // 临时素材失败，尝试永久素材 API
-  logInfo(`[wemp] 临时素材 API 失败 (${tempResult.error})，尝试永久素材 API...`);
+  logInfo(`[wemp:${account.accountId}] 临时素材 API 失败 (${tempResult.error})，尝试永久素材 API...`);
   const permResult = await getPermanentMedia(account, mediaId);
   if (permResult.success) {
-    logInfo(`[wemp] 通过永久素材 API 下载成功: ${mediaId.substring(0, 20)}...`);
+    logInfo(`[wemp:${account.accountId}] 通过永久素材 API 下载成功: ${mediaId.substring(0, 20)}...`);
     return permResult;
   }
 

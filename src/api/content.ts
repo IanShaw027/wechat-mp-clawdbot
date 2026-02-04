@@ -48,7 +48,7 @@ export async function processArticleImages(
         uploadedUrls.set(originalUrl, result.data);
         processedContent = processedContent.split(originalUrl).join(result.data);
       } else {
-        logWarn(`[wemp] 上传图片失败: ${originalUrl} - ${result.error}`);
+        logWarn(`[wemp:${account.accountId}] 上传图片失败: ${originalUrl} - ${result.error}`);
       }
     }
 

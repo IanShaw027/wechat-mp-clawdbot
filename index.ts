@@ -19,6 +19,7 @@ const plugin = {
 
     // 启动时同步菜单（异步执行，不阻塞启动）
     // 只有显式开启 syncMenu: true 才会同步
+    // 注意：syncMenuWithAiAssistant 内部已有日志输出，这里不再重复输出
     const cfg = (api as any).config;
     const wempCfg = cfg?.channels?.wemp;
     if (wempCfg?.enabled && wempCfg?.syncMenu === true) {
@@ -26,13 +27,10 @@ const plugin = {
         try {
           const account = resolveWechatMpAccount(cfg, "default");
           if (account) {
-            const result = await syncMenuWithAiAssistant(account, cfg);
-            if (result.action !== "unchanged") {
-              logInfo(api.runtime, `[wemp] 菜单同步: ${result.message}`);
-            }
+            await syncMenuWithAiAssistant(account, cfg);
           }
         } catch (err) {
-          logError(api.runtime, "[wemp] 菜单同步失败:", err);
+          logError(api.runtime, `[wemp:default] 菜单同步失败:`, err);
         }
       });
     }
