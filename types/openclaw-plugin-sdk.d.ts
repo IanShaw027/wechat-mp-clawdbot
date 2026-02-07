@@ -10,6 +10,20 @@ declare module "openclaw/plugin-sdk" {
     runtime: OpenclawRuntime;
     registerChannel(opts: { plugin: ChannelPlugin<any> }): void;
     registerHttpHandler(handler: HttpHandler): void;
+    registerTool(tool: AgentTool, options?: { optional?: boolean }): void;
+  }
+
+  export interface AgentTool {
+    name: string;
+    description: string;
+    parameters: any;
+    execute: (id: string, params: any) => Promise<ToolResult>;
+  }
+
+  export interface ToolResult {
+    content: Array<{ type: "text"; text: string }>;
+    details?: any;
+    isError?: boolean;
   }
 
   export interface OpenclawRuntime {
@@ -68,6 +82,9 @@ declare module "openclaw/plugin-sdk" {
     outbound?: ChannelOutboundHandlers;
     gateway?: ChannelGatewayHandlers;
     status?: ChannelStatusHandlers<TAccount>;
+    agentPrompt?: {
+      messageToolHints?: () => string[];
+    };
     sendText?: (ctx: SendTextContext) => Promise<SendResult>;
     sendMedia?: (ctx: SendMediaContext) => Promise<SendResult>;
     startAccount?: (ctx: AccountStartContext) => Promise<void>;
@@ -89,6 +106,8 @@ declare module "openclaw/plugin-sdk" {
     media?: boolean;
     reactions?: boolean;
     threads?: boolean;
+    blockStreaming?: boolean;
+    nativeCommands?: boolean;
   }
 
   export interface ChannelConfigHandlers<TAccount> {

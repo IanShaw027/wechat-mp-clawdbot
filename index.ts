@@ -1,21 +1,29 @@
 import type { OpenclawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { wechatMpPlugin } from "./src/channel.js";
 import { logError, logInfo, logWarn } from "./src/log.js";
 import { setWechatMpRuntime } from "./src/runtime.js";
 import { handleWechatMpWebhookRequest } from "./src/webhook-handler.js";
 import { sendCustomMessage, createMenu, deleteMenu, getMenu, createMenuFromConfig, syncMenuWithAiAssistant } from "./src/api.js";
 import { resolveWechatMpAccount } from "./src/config.js";
+import { registerWempTools } from "./src/tools.js";
+import { WempConfigSchema, WempConfigUiHints } from "./src/config-schema.js";
 
 const plugin = {
   id: "wemp",
   name: "微信公众号",
   description: "微信公众号渠道插件 (服务号客服消息)",
-  configSchema: emptyPluginConfigSchema(),
+  configSchema: {
+    schema: WempConfigSchema,
+    uiHints: WempConfigUiHints,
+  },
   register(api: OpenclawPluginApi) {
     setWechatMpRuntime(api.runtime);
     api.registerChannel({ plugin: wechatMpPlugin });
     api.registerHttpHandler(handleWechatMpWebhookRequest);
+
+    // 注册 Agent 工具
+    registerWempTools(api);
+    logInfo(api.runtime, "[wemp] Registered 5 agent tools: wemp_draft, wemp_publish, wemp_comment, wemp_stats, wemp_user");
 
     // 启动时同步菜单（异步执行，不阻塞启动）
     // 只有显式开启 syncMenu: true 才会同步

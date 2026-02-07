@@ -1,6 +1,6 @@
 {
   "name": "wemp",
-  "version": "2026.2.1",
+  "version": "2026.2.8",
   "type": "module",
   "license": "MIT",
   "description": "微信公众号 channel plugin (服务号客服消息)",

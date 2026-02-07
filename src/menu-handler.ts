@@ -136,16 +136,17 @@ export async function handleSpecialCommand(
 
   // 解除配对
   if (content === "解除配对" || content === "取消绑定") {
+    // 先检查是否已配对（在设置 opt-out 之前，否则 isPaired 会因为 opt-out 直接返回 false）
+    const paired = runtime
+      ? await isPaired({ runtime, accountId: account.accountId, openId })
+      : false;
+
     // OpenClaw allowFrom store is owner-managed; here we only provide a local opt-out.
     try {
       setOptOut(account.accountId, openId, true);
     } catch {
       // ignore
     }
-
-    const paired = runtime
-      ? await isPaired({ runtime, accountId: account.accountId, openId })
-      : false;
 
     if (paired) {
       await sendCustomMessage(

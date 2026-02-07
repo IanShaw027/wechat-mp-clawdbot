@@ -64,9 +64,18 @@ export const wechatMpPlugin: ChannelPlugin<ResolvedWechatMpAccount> & { pairing?
   },
   capabilities: {
     chatTypes: ["direct"],
-    media: false,
-    reactions: false,
+    media: true,  // 支持图片收发
+    reactions: false,  // 公众号不支持表情反应
     threads: false,
+    blockStreaming: true,  // 公众号不支持流式输出
+  },
+  agentPrompt: {
+    messageToolHints: () => [
+      "- 微信公众号客服消息有 48 小时限制：用户 48 小时内与公众号互动过才能发送客服消息",
+      "- 图片需要先上传获取 media_id，临时素材有效期 3 天",
+      "- 长消息会自动分段发送（单条限制 600 字符）",
+      "- 模板消息需要用户授权且有发送频率限制",
+    ],
   },
   reload: { configPrefixes: ["channels.wemp"] },
   // CLI onboarding wizard
