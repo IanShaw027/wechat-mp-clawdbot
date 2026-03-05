@@ -19,8 +19,21 @@ const plugin = {
   register(api: OpenclawPluginApi) {
     setWechatMpRuntime(api.runtime);
     api.registerChannel({ plugin: wechatMpPlugin });
-    // Note: Webhook handling is now done inside the channel plugin via registerWechatMpWebhookTarget
-    // api.registerHttpHandler is deprecated and removed in newer OpenClaw versions
+    
+    // 注册 HTTP 路由（使用新的 registerHttpRoute API）
+    // 注意：TypeScript 类型定义可能未更新，使用 any 绕过
+    const registerHttpRoute = (api as any).registerHttpRoute;
+    if (typeof registerHttpRoute === "function") {
+      registerHttpRoute({
+        path: "/wemp",
+        auth: "plugin",  // 使用 plugin 级别认证（微信自己验证签名）
+        match: "prefix",
+        handler: handleWechatMpWebhookRequest,
+      });
+      logInfo(api.runtime, "[wemp] HTTP route registered at /wemp");
+    } else {
+      logWarn(api.runtime, "[wemp] registerHttpRoute not available, webhook may not work");
+    }
 
     // 注册 Agent 工具
     registerWempTools(api);
