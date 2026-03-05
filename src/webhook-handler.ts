@@ -334,35 +334,42 @@ async function handleRequest(
 
   // POST 请求 - 接收消息
   if (req.method === "POST") {
-    let rawBody = "";
-    try {
-      rawBody = await readRequestBody(req, MAX_WEBHOOK_BODY_BYTES);
-    } catch (err) {
-      const accountHint = targets[0]?.account?.accountId ? `:${targets[0].account.accountId}` : "";
-      logWarn(`[wemp${accountHint}] 读取请求体失败: ${err}`);
-      res.statusCode = String(err).includes("too large") ? 413 : 400;
-      res.end("Bad Request");
-      return true;
-    }
-
+    // 安全加固：先验证签名，再读取 body
+    const { signature, timestamp, nonce } = query;
+    
     let selected: WebhookTarget | undefined;
-    let parsed: ReturnType<typeof processWechatMessage> | undefined;
     for (const target of targets) {
-      const attempt = processWechatMessage(target.account, rawBody, query);
-      if (isOk(attempt)) {
+      if (verifySignature(target.account.token, signature ?? "", timestamp ?? "", nonce ?? "")) {
         selected = target;
-        parsed = attempt;
         break;
       }
     }
 
-    if (!selected || !parsed || !isOk(parsed)) {
-      // Use the first target (after reverse) for logging only
-      const hint = targets[0]?.account?.accountId ? `account=${targets[0].account.accountId}` : "account=unknown";
-      const errorText = (parsed && !isOk(parsed)) ? parsed.error : "验证失败或消息解析失败";
-      logWarn(`[wemp] ${hint} ${errorText}`);
-      res.statusCode = String(errorText).includes("验证失败") ? 403 : 400;
-      res.end(String(errorText));
+    if (!selected) {
+      logWarn(`[wemp] 签名验证失败 (path=${pathname})`);
+      res.statusCode = 403;
+      res.end("验证失败");
+      return true;
+    }
+
+    // 验证通过后再读取 body（带超时限制）
+    let rawBody = "";
+    try {
+      rawBody = await readRequestBody(req, MAX_WEBHOOK_BODY_BYTES, 5000);
+    } catch (err) {
+      logWarn(`[wemp:${selected.account.accountId}] 读取请求体失败: ${err}`);
+      res.statusCode = String(err).includes("too large") ? 413 : 
+                       String(err).includes("timeout") ? 408 : 400;
+      res.end("Bad Request");
+      return true;
+    }
+
+    // 解析消息
+    const parsed = processWechatMessage(selected.account, rawBody, query);
+    if (!isOk(parsed)) {
+      logWarn(`[wemp:${selected.account.accountId}] 消息解析失败: ${parsed.error}`);
+      res.statusCode = 400;
+      res.end(String(parsed.error));
       return true;
     }
 

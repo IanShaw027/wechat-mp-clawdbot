@@ -31,16 +31,29 @@ const MenuButtonSchema = Type.Object(
 const AccountSchema = Type.Object(
   {
     enabled: Type.Optional(Type.Boolean({ description: "是否启用该账号", default: true })),
-    appId: Type.Optional(Type.String({ description: "公众号 AppID" })),
+    appId: Type.Optional(Type.String({ 
+      description: "公众号 AppID",
+      "x-secret-ref": true  // 支持 SecretRef
+    })),
     appSecret: Type.Optional(
       Type.String({
         description: "公众号 AppSecret",
         format: "password",
+        "x-secret-ref": true,  // 支持 SecretRef
+        "x-sensitive": true
       })
     ),
     appSecretFile: Type.Optional(Type.String({ description: "AppSecret 文件路径" })),
-    token: Type.Optional(Type.String({ description: "消息校验 Token" })),
-    encodingAESKey: Type.Optional(Type.String({ description: "消息加解密密钥（43位）" })),
+    token: Type.Optional(Type.String({ 
+      description: "消息校验 Token",
+      "x-secret-ref": true,  // 支持 SecretRef
+      "x-sensitive": true
+    })),
+    encodingAESKey: Type.Optional(Type.String({ 
+      description: "消息加解密密钥（43位）",
+      "x-secret-ref": true,  // 支持 SecretRef
+      "x-sensitive": true
+    })),
     webhookPath: Type.Optional(Type.String({ description: "Webhook 路径", default: "/wemp" })),
     name: Type.Optional(Type.String({ description: "账号名称" })),
   },
@@ -51,17 +64,34 @@ export const WempConfigSchema = Type.Object(
   {
     enabled: Type.Optional(Type.Boolean({ description: "是否启用微信公众号渠道", default: false })),
 
-    appId: Type.Optional(Type.String({ description: "公众号 AppID" })),
+    appId: Type.Optional(Type.String({ 
+      description: "公众号 AppID",
+      "x-secret-ref": true
+    })),
     appSecret: Type.Optional(
       Type.String({
         description: "公众号 AppSecret",
         format: "password",
+        "x-secret-ref": true,
+        "x-sensitive": true
       })
     ),
     appSecretFile: Type.Optional(Type.String({ description: "AppSecret 文件路径" })),
-    token: Type.Optional(Type.String({ description: "消息校验 Token" })),
-    encodingAESKey: Type.Optional(Type.String({ description: "消息加解密密钥（43位）" })),
-    EncodingAESKey: Type.Optional(Type.String({ description: "兼容字段：消息加解密密钥（43位）" })),
+    token: Type.Optional(Type.String({ 
+      description: "消息校验 Token",
+      "x-secret-ref": true,
+      "x-sensitive": true
+    })),
+    encodingAESKey: Type.Optional(Type.String({ 
+      description: "消息加解密密钥（43位）",
+      "x-secret-ref": true,
+      "x-sensitive": true
+    })),
+    EncodingAESKey: Type.Optional(Type.String({ 
+      description: "兼容字段：消息加解密密钥（43位）",
+      "x-secret-ref": true,
+      "x-sensitive": true
+    })),
     webhookPath: Type.Optional(Type.String({ description: "Webhook 路径", default: "/wemp" })),
     name: Type.Optional(Type.String({ description: "账号名称（用于多账号区分）" })),
 
@@ -74,7 +104,12 @@ export const WempConfigSchema = Type.Object(
     // 配对与 Agent 配置（当前代码实际使用）
     agentPaired: Type.Optional(Type.String({ description: "已配对用户使用的 Agent ID", default: "main" })),
     agentUnpaired: Type.Optional(Type.String({ description: "未配对用户使用的 Agent ID", default: "wemp-cs" })),
-    pairingApiToken: Type.Optional(Type.String({ description: "配对 API Token", format: "password" })),
+    pairingApiToken: Type.Optional(Type.String({ 
+      description: "配对 API Token", 
+      format: "password",
+      "x-secret-ref": true,
+      "x-sensitive": true
+    })),
 
     // 菜单与文案配置
     syncMenu: Type.Optional(Type.Boolean({ description: "启动时是否同步自定义菜单", default: false })),
