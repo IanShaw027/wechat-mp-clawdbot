@@ -1,0 +1,20 @@
+[
+  {
+    "id": "activated:acc-handoff-1773134130327-0.3498489832629339:open-handoff-1773134130327-0.3498489832629339:1773134130335",
+    "type": "activated",
+    "accountId": "acc-handoff-1773134130327-0.3498489832629339",
+    "openId": "open-handoff-1773134130327-0.3498489832629339",
+    "at": 1773134130335,
+    "contact": "客服微信: abc",
+    "expireAt": 1773135930335,
+    "reason": "click"
+  },
+  {
+    "id": "resumed:acc-handoff-1773134130327-0.3498489832629339:open-handoff-1773134130327-0.3498489832629339:1773134130348",
+    "type": "resumed",
+    "accountId": "acc-handoff-1773134130327-0.3498489832629339",
+    "openId": "open-handoff-1773134130327-0.3498489832629339",
+    "at": 1773134130348,
+    "reason": "command"
+  }
+]
